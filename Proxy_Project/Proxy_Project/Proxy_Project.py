@@ -2,9 +2,9 @@
 import threading
 import ssl
 from datetime import datetime, time
+config = {}
 # Hàm đọc file config
-def read_config_file(file_path):
-    config = {}
+def read_config_file(file_path, config):
     with open(file_path, 'r') as file:
         for line in file:
             line = line.strip()
@@ -13,19 +13,27 @@ def read_config_file(file_path):
                 key = key.strip()
                 value = value.strip()
                 if key == 'cache_time':
-                    config[key] = int(value)
+                    limit_time,_,unit = value.split(' ',2)
+                    config[key] = int(limit_time)
                 elif key == 'whitelisting':
                     config[key] = [site.strip() for site in value.split(',')]
                 elif key == 'time':
                     start_time, end_time = value.split('-')
                     config['start_time'] = int(start_time.strip())
                     config['end_time'] = int(end_time.strip())
-    return config
 
 # Hàm kiểm tra xem hiện tại có trong khung giờ cho phép hay không
-def is_within_time_range(opening_time, closing_time):
-    current_time = datetime.now().time()
-    return opening_time <= current_time <= closing_time
+def is_within_time_range(config):
+    current_time = datetime.now()
+    return config['start_time'] <= current_time.hour <= config['end_time']
+
+def Error403(client_socket):
+    with open('error403.html', 'r') as file:
+            response_data = file.read()
+
+        # Tạo phản hồi HTTP chứa nội dung của trang HTML mặc định
+    response = f"HTTP/1.1 200 OK\r\nContent-Length: {len(response_data)}\r\n\r\n{response_data}"
+    client_socket.sendall(response.encode())
 
 def handle_client(client_socket):
     request_data = client_socket.recv(4096)
@@ -38,7 +46,8 @@ def handle_client(client_socket):
 
     #if url==data:
         #return  
-    if request_method == ["GET", "POST", "HEAD"] and is_within_time_range():
+    arrayName = ["GET", "POST", "HEAD"]
+    if request_method in arrayName and is_within_time_range(config):
         # Xử lý URL
         #http://oosc.online/
 
@@ -79,15 +88,15 @@ def handle_client(client_socket):
             remote_data = remote_socket.recv(4096)
             if len(remote_data) == 0:
                 break 
-            client_socket.send(remote_data)
+            client_socket.sendall(remote_data)
 
         # Đóng kết nối
         remote_socket.close()
         client_socket.close()
     else:
-         #Đọc file HTML
-         print(1123)
-         #Hiển thị trên Client_Proxy
+         Error403(client_socket)
+         client_socket.close()
+
 
 def proxy_server():
     local_host = '127.0.0.1'  # Địa chỉ IP của máy cục bộ (localhost)
@@ -102,11 +111,10 @@ def proxy_server():
 
     while True:
         client_socket, client_addr = server_socket.accept()  # Chấp nhận kết nối mới từ trình duyệt
-        print(f"Kết nối mới từ {client_addr[0]}:{client_addr[1]}")
-
         client_handler = threading.Thread(target=handle_client, args=(client_socket,))
         client_handler.start()  # Bắt đầu xử lý kết nối từ trình duyệt
 
 if __name__ == "__main__":
+    read_config_file("File_Config.txt", config)
     proxy_server()
 
