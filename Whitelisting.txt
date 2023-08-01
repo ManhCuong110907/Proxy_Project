@@ -1,0 +1,8 @@
+http://oosc.online/
+http://example.com/
+http://www.google.com/
+http://www.bing.com/
+http://testphp.vulnweb.com/login.php
+http://vbsca.ca/login/login.asp
+http://vbsca.ca/login/
+http://vbsca.ca/login/LoginsAndPermissions3.htm
