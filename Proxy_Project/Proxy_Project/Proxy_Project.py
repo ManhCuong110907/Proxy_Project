@@ -2,8 +2,9 @@
 import threading
 import ssl
 import os
-import random
 from datetime import datetime, time
+import time
+import shutil
 cache_data = {}
 config = {}
 
@@ -39,7 +40,15 @@ def Error403(client_socket):
         # Tạo phản hồi HTTP chứa nội dung của trang HTML mặc định
     response = f"HTTP/1.1 200 OK\r\nContent-Length: {len(response_data)}\r\n\r\n{response_data}"
     client_socket.sendall(response.encode())
-
+def delete_folder_after_delay(folder_path):
+    # Đợi một khoảng thời gian cach_time
+    time.sleep(config['cache_time'])
+    
+    # Xoá thư mục
+    try:
+        shutil.rmtree(folder_path)
+    except OSError as e:
+        return
 # Hàm xử lý input
 def handle_client(client_socket):
     request_data = client_socket.recv(4096)
@@ -48,43 +57,55 @@ def handle_client(client_socket):
     # Tìm kiếm URL và phương thức yêu cầu
     request_line = request_lines[0].decode()
     if(request_line):
-            request_method, url, _ = request_line.split()
-            arrayName = ["GET", "POST", "HEAD"]
-        
-            # Xử lý URL
-            #http://oosc.online/
-            if url.startswith("http://"):
-                url = url[7:]
-            elif url.startswith("https://"):
-                url = url[8:]
+        request_method, url, _ = request_line.split()
+        arrayName = ["GET", "POST", "HEAD"]
+        if '.png' in url or '.jpg' in url or '.gif' in url or '.ico'in url:
+            file_name=os.path.basename(url)
+            image_name,_= file_name.split('.')
+        # Xử lý URL
+        #http://oosc.online/
+        if url.startswith("http://"):
+            url = url[7:]
+        elif url.startswith("https://"):
+            url = url[8:]
 
-            # Tách thông tin hostname và port (nếu có)
-            #testphp.vulnweb.com/login.php
-            if '/' in url:
-                host_path = url.split('/', 1)
-                host = host_path[0]
-                path = '/' + host_path[1]
-            #oosc.online
+        # Tách thông tin hostname và port (nếu có)
+        #testphp.vulnweb.com/login.php
+        if '/' in url:
+            host_path = url.split('/', 1)
+            host = host_path[0]
+            path = '/' + host_path[1]
+        #oosc.online
+        else:
+            host = url
+            path = '/'
+        #kshdfskjh:12124
+        if ':' in host:
+            remote_host, remote_port = host.split(':', 1)
+            remote_port = int(remote_port)
+        else:
+            remote_host = host
+            remote_port = 80
+    #request_method = "HEAD"
+        if host in config['whitelisting']and request_method in arrayName and is_within_time_range(config):
+            if url in cache_data:
+                cached_data = cache_data[url]
+                timestamp = cached_data['timestamp']
+                current_time = time.time()
+                if current_time - timestamp <= config['cache_time']:
+                    image_data = cached_data['image_data']
+                    client_socket.sendall(image_data)
+                    print("okkkk")
             else:
-                host = url
-                path = '/'
-            #kshdfskjh:12124
-            if ':' in host:
-                remote_host, remote_port = host.split(':', 1)
-                remote_port = int(remote_port)
-            else:
-                remote_host = host
-                remote_port = 80
-        #request_method = "HEAD"
-            if host in config['whitelisting']and request_method in arrayName and is_within_time_range(config):
                 # Kết nối tới máy chủ web từ xa
                 remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 remote_socket.connect((remote_host, remote_port))
-
-                # Gửi yêu cầu HTTP tới máy chủ web từ xa
-                # GET / HTTP/1.1\r\nHost: oosc.online \r\n\r\n 
-                remote_request = f"{request_method} {path} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
-                remote_socket.sendall(remote_request)
+                if request_method == "POST":
+                    remote_socket.sendall(request_data)
+                else:
+                    # Gửi yêu cầu GET hoặc HEAD tới máy chủ web từ xa
+                    remote_request = f"{request_method} {path} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
+                    remote_socket.sendall(remote_request)
 
                 
                 # Nhận phản hồi từ máy chủ web từ xa và gửi lại cho trình duyệt
@@ -95,23 +116,25 @@ def handle_client(client_socket):
                         break 
                     image_data += remote_data
                     client_socket.sendall(remote_data)
-                if b'content-type: image/' in image_data.lower():
-                    
-                    save_image(image_data,host)
-                # Đóng kết nối
                 remote_socket.close()
-                client_socket.close()
-            else:
+            if b'content-type: image/' in image_data.lower():
+                save_image(image_data, host, image_name, url)
+                delete_folder_after_delay(f"cache/{host}")
+            # Đóng kết nối
+            client_socket.close()  
+        else:
                 Error403(client_socket)
                 client_socket.close()
 
-
-def save_image(image_data,host):
+def save_image(image_data, host, image_name, url):
     response_header,response_body = image_data.split(b'\r\n\r\n')
     # Tạo một thư mục để lưu hình ảnh (nếu chưa tồn tại)
     folder=f"cache/{str(host)}"
+    if not os.path.exists("cache"):
+        os.makedirs("cache")
     if not os.path.exists(folder):
         os.makedirs(folder)
+        cache_data[url] = {'image_data': image_data, 'timestamp': time.time()}
     # Xác định định dạng hình ảnh dựa trên tiêu đề Content-Type
     image_format = 'jpg'  # Đặt giá trị mặc định là .jpg
     if b'content-type: image/png' in response_header:
@@ -121,12 +144,9 @@ def save_image(image_data,host):
     # Thêm các định dạng hình ảnh khác (nếu cần)
 
     # Tạo tên tệp hình ảnh dựa trên thời gian hiện tại và định dạng hình ảnh
-    #timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    random_integer = random.randint(1, 100) 
-    image_filename = f'image_{random_integer}.{image_format}'
-    image_path = os.path.join(folder, image_filename)
+    image_filename = f'{folder}/{image_name}.{image_format}'
     # Lưu dữ liệu hình ảnh vào tệp
-    with open(image_path, 'wb') as file:
+    with open(image_filename, 'wb') as file:
         file.write(response_body)
 def proxy_server():
     local_host = '127.0.0.1'  # Địa chỉ IP của máy cục bộ (localhost)
