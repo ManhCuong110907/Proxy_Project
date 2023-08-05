@@ -2,9 +2,11 @@
 import threading
 import ssl
 import os
+import random
 from datetime import datetime, time
 cache_data = {}
 config = {}
+
 # Hàm đọc file config
 def read_config_file(file_path, config):
     with open(file_path, 'r') as file:
@@ -46,64 +48,86 @@ def handle_client(client_socket):
     # Tìm kiếm URL và phương thức yêu cầu
     request_line = request_lines[0].decode()
     if(request_line):
-        print(request_line)
-        request_method, url, _ = request_line.split()
-    
-    arrayName = ["GET", "POST", "HEAD"]
-    if request_method in arrayName and is_within_time_range(config):
-        # Xử lý URL
-        #http://oosc.online/
-        if url.startswith("http://"):
-            url = url[7:]
-        elif url.startswith("https://"):
-            url = url[8:]
+            request_method, url, _ = request_line.split()
+            arrayName = ["GET", "POST", "HEAD"]
+        
+            # Xử lý URL
+            #http://oosc.online/
+            if url.startswith("http://"):
+                url = url[7:]
+            elif url.startswith("https://"):
+                url = url[8:]
 
-        # Tách thông tin hostname và port (nếu có)
-        #testphp.vulnweb.com/login.php
-        if '/' in url:
-            host_path = url.split('/', 1)
-            host = host_path[0]
-            path = '/' + host_path[1]
-        #oosc.online
-        else:
-            host = url
-            path = '/'
-        #kshdfskjh:12124
-        if ':' in host:
-            remote_host, remote_port = host.split(':', 1)
-            remote_port = int(remote_port)
-        else:
-            remote_host = host
-            remote_port = 80
-    #request_method = "HEAD"
-        if host in config['whitelisting']:
-            # Kết nối tới máy chủ web từ xa
-            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            remote_socket.connect((remote_host, remote_port))
+            # Tách thông tin hostname và port (nếu có)
+            #testphp.vulnweb.com/login.php
+            if '/' in url:
+                host_path = url.split('/', 1)
+                host = host_path[0]
+                path = '/' + host_path[1]
+            #oosc.online
+            else:
+                host = url
+                path = '/'
+            #kshdfskjh:12124
+            if ':' in host:
+                remote_host, remote_port = host.split(':', 1)
+                remote_port = int(remote_port)
+            else:
+                remote_host = host
+                remote_port = 80
+        #request_method = "HEAD"
+            if host in config['whitelisting']and request_method in arrayName and is_within_time_range(config):
+                # Kết nối tới máy chủ web từ xa
+                remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                remote_socket.connect((remote_host, remote_port))
 
-            # Gửi yêu cầu HTTP tới máy chủ web từ xa
-            # GET / HTTP/1.1\r\nHost: oosc.online \r\n\r\n 
-            remote_request = f"{request_method} {path} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
-            remote_socket.sendall(remote_request)
+                # Gửi yêu cầu HTTP tới máy chủ web từ xa
+                # GET / HTTP/1.1\r\nHost: oosc.online \r\n\r\n 
+                remote_request = f"{request_method} {path} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
+                remote_socket.sendall(remote_request)
 
-            # Nhận phản hồi từ máy chủ web từ xa và gửi lại cho trình duyệt
-            while True:
-                remote_data = remote_socket.recv(4096)
-                if len(remote_data) == 0:
-                    break 
-                client_socket.sendall(remote_data)
-                #Ghi ra file output.txt tạm thời
-                with open("output.txt", 'w') as f_out:
-                    f_out.write(remote_data.decode())
+                
+                # Nhận phản hồi từ máy chủ web từ xa và gửi lại cho trình duyệt
+                image_data = b''  
+                while True:
+                    remote_data = remote_socket.recv(4096)
+                    if len(remote_data) == 0:
+                        break 
+                    image_data += remote_data
+                    client_socket.sendall(remote_data)
+                if b'content-type: image/' in image_data.lower():
+                    
+                    save_image(image_data,host)
+                # Đóng kết nối
+                remote_socket.close()
+                client_socket.close()
+            else:
+                Error403(client_socket)
+                client_socket.close()
 
 
-            # Đóng kết nối
-            remote_socket.close()
-            client_socket.close()
-    else:
-         Error403(client_socket)
-         client_socket.close()
+def save_image(image_data,host):
+    response_header,response_body = image_data.split(b'\r\n\r\n')
+    # Tạo một thư mục để lưu hình ảnh (nếu chưa tồn tại)
+    folder=f"cache/{str(host)}"
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    # Xác định định dạng hình ảnh dựa trên tiêu đề Content-Type
+    image_format = 'jpg'  # Đặt giá trị mặc định là .jpg
+    if b'content-type: image/png' in response_header:
+        image_format = 'png'
+    elif b'content-type: image/gif' in response_header:
+        image_format = 'gif'
+    # Thêm các định dạng hình ảnh khác (nếu cần)
 
+    # Tạo tên tệp hình ảnh dựa trên thời gian hiện tại và định dạng hình ảnh
+    #timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    random_integer = random.randint(1, 100) 
+    image_filename = f'image_{random_integer}.{image_format}'
+    image_path = os.path.join(folder, image_filename)
+    # Lưu dữ liệu hình ảnh vào tệp
+    with open(image_path, 'wb') as file:
+        file.write(response_body)
 def proxy_server():
     local_host = '127.0.0.1'  # Địa chỉ IP của máy cục bộ (localhost)
     local_port = 8000  # Cổng để lắng nghe các kết nối từ trình duyệt
@@ -123,4 +147,3 @@ def proxy_server():
 if __name__ == "__main__":
     read_config_file("File_Config.txt", config)
     proxy_server()
-
